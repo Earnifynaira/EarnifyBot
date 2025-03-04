@@ -7,10 +7,10 @@ import requests
 from flask import Flask, request
 from telegram import Bot, Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
-from database import connect_db
-from config import TOKEN, FLUTTERWAVE_PAYMENT_LINK, WEBHOOK_URL, ADMIN_ID  # ✅ Import ADMIN_ID from config.py
+from database import connect_db  # ✅ Ensure this file exists
+from config import TOKEN, FLUTTERWAVE_PAYMENT_LINK, WEBHOOK_URL, ADMIN_ID  # ✅ Import settings
 
-# ✅ Set Up Bot & Flask
+# ✅ Initialize Bot & Flask App
 bot = Bot(token=TOKEN)
 app = Flask(__name__)
 
@@ -21,7 +21,7 @@ dispatcher = Dispatcher(bot, None, workers=0)
 def register_user(user_id, username, referred_by=None):
     conn = connect_db()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+    cur.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
     user = cur.fetchone()
 
     if not user:
@@ -35,7 +35,7 @@ def register_user(user_id, username, referred_by=None):
 def get_user(user_id):
     conn = connect_db()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+    cur.execute("SELECT user_id, balance FROM users WHERE user_id = %s", (user_id,))
     user = cur.fetchone()
     cur.close()
     conn.close()
@@ -50,14 +50,11 @@ def update_balance(user_id, amount):
     cur.close()
     conn.close()
 
-# ✅ Handle `/start` Command (Referral System)
+# ✅ Handle `/start` Command
 def start(update: Update, context: CallbackContext):
     user_id = update.message.chat.id
     username = update.message.chat.username or "NoUsername"
-
-    referred_by = None
-    if context.args:
-        referred_by = int(context.args[0])
+    referred_by = int(context.args[0]) if context.args else None
 
     register_user(user_id, username, referred_by)
 
@@ -87,7 +84,7 @@ def withdraw_request(update: Update, context: CallbackContext):
         update.message.reply_text("❌ You are not registered. Use /start to begin.")
         return
 
-    if user[3] < 100000:
+    if user[1] < 100000:  # Check balance
         update.message.reply_text("❌ Minimum withdrawal amount is ₦100,000.")
         return
 
@@ -101,19 +98,47 @@ def withdraw_request(update: Update, context: CallbackContext):
 # ✅ Handle Admin Approval (`/approve <withdraw_id>`)
 def approve_withdrawal(update: Update, context: CallbackContext):
     user_id = update.message.chat.id
-    if user_id != int(ADMIN_ID):  # ✅ Check Admin Privileges
+    if str(user_id) != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to approve withdrawals.")
         return
 
     try:
         withdraw_id = int(context.args[0])
         conn = connect_db()
         cur = conn.cursor()
+
+        # Check if withdrawal exists
+        cur.execute("SELECT user_id, amount, status FROM withdrawals WHERE id = %s", (withdraw_id,))
+        withdrawal = cur.fetchone()
+
+        if not withdrawal:
+            update.message.reply_text(f"❌ Withdrawal ID {withdraw_id} not found.")
+            cur.close()
+            conn.close()
+            return
+
+        user_id, amount, status = withdrawal
+
+        # Prevent double approval
+        if status == "approved":
+            update.message.reply_text(f"⚠️ Withdrawal ID {withdraw_id} is already approved.")
+            cur.close()
+            conn.close()
+            return
+
+        # Deduct funds from user's balance & approve
+        cur.execute("UPDATE users SET balance = balance - %s WHERE user_id = %s", (amount, user_id))
         cur.execute("UPDATE withdrawals SET status = 'approved' WHERE id = %s", (withdraw_id,))
         conn.commit()
+
         cur.close()
         conn.close()
-        update.message.reply_text(f"✅ Withdrawal ID {withdraw_id} approved.")
-    except:
+
+        # Notify user
+        bot.send_message(user_id, f"✅ Your withdrawal of ₦{amount} has been approved! You will receive your funds soon.")
+        update.message.reply_text(f"✅ Withdrawal ID {withdraw_id} for ₦{amount} has been approved.")
+
+    except (IndexError, ValueError):
         update.message.reply_text("❌ Invalid command format. Use: /approve <withdraw_id>")
 
 # ✅ Hourly Broadcast Function
