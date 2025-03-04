@@ -1,12 +1,16 @@
 import telebot
-import time
-import schedule
 import requests
+import os
+import threading
+import schedule
+import time
+from flask import Flask, request
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database import connect_db
-from config import TOKEN, FLUTTERWAVE_PAYMENT_LINK
+from config import TOKEN, FLUTTERWAVE_PAYMENT_LINK, WEBHOOK_URL
 
 bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__)
 
 # 📌 Register User
 def register_user(user_id, username, referred_by=None):
@@ -105,26 +109,48 @@ def approve_withdrawal(message):
     except:
         bot.send_message(ADMIN_ID, "❌ Invalid command format. Use: /approve <withdraw_id>")
 
-# 📌 Hourly Broadcast
+# 📌 Hourly Broadcast (Runs in Background)
 def send_hourly_broadcast():
-    conn = connect_db()
-    cur = conn.cursor()
-    cur.execute("SELECT user_id FROM users")
-    users = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    for user in users:
-        bot.send_message(user[0], "⏳ Reminder: You can now claim your ₦40,000 for this hour! Click '💰 Click to Earn' now.")
-
-schedule.every().hour.at(":01").do(send_hourly_broadcast)
-
-# 📌 Start Bot & Scheduler
-def run_bot():
     while True:
         schedule.run_pending()
         time.sleep(1)
 
-import threading
-threading.Thread(target=run_bot).start()
-bot.polling()
+def schedule_broadcast():
+    def broadcast_message():
+        conn = connect_db()
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM users")
+        users = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        for user in users:
+            bot.send_message(user[0], "⏳ Reminder: You can now claim your ₦40,000 for this hour! Click '💰 Click to Earn' now.")
+
+    schedule.every().hour.at(":01").do(broadcast_message)
+
+    thread = threading.Thread(target=send_hourly_broadcast)
+    thread.daemon = True
+    thread.start()
+
+# 📌 Webhook Route
+@app.route(f"/{TOKEN}", methods=["POST"])
+def receive_update():
+    json_update = request.get_json()
+    if json_update:
+        bot.process_new_updates([telebot.types.Update.de_json(json_update)])
+    return "OK", 200
+
+# 📌 Webhook Setup
+def set_webhook():
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL)
+
+@app.route("/")
+def home():
+    return "EarnifyBot is Running!", 200
+
+if __name__ == "__main__":
+    set_webhook()
+    schedule_broadcast()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
