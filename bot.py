@@ -1,4 +1,4 @@
-import telebot 
+from telegram import Bot 
 import requests
 import os
 import threading
