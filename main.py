@@ -1,4 +1,4 @@
-import telebot
+import telebot 
 import requests
 import os
 import threading
@@ -7,7 +7,7 @@ import time
 from flask import Flask, request
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database import connect_db
-from config import TOKEN, FLUTTERWAVE_PAYMENT_LINK, WEBHOOK_URL
+from config import TOKEN, FLUTTERWAVE_PAYMENT_LINK, WEBHOOK_URL, ADMIN_ID  # ✅ Import ADMIN_ID from config.py
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
@@ -94,7 +94,7 @@ def withdraw_request(message):
 # 📌 Handle Admin Approvals
 @bot.message_handler(commands=['approve'])
 def approve_withdrawal(message):
-    if message.chat.id != ADMIN_ID:
+    if message.chat.id != ADMIN_ID:  # ✅ Uses ADMIN_ID from .env
         return
     
     try:
